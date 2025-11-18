@@ -267,14 +267,10 @@ model ContentStrategy {
   identifiedGaps        String          @db.Text
   coveragePeriodDays    Int             @default(30)
 
-  // Activation control
   isActive              Boolean         @default(false)
   activatedAt           DateTime?
-  replacedBy            Int?
-  replacedAt            DateTime?
 
-  // AI metadata
-  aiModel               String          @db.VarChar(100)
+  aiModel               String?         @db.VarChar(100)
   tokenCount            Int?
   processingMs          Int?
 
@@ -283,12 +279,9 @@ model ContentStrategy {
   session               StrategySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   themePillars          ThemePillar[]
   calendarPosts         CalendarPost[]
-  replacedByStrategy    ContentStrategy? @relation("StrategyReplacement", fields: [replacedBy], references: [id])
-  replacements          ContentStrategy[] @relation("StrategyReplacement")
 
   @@unique([sessionId, versionNumber])
   @@index([sessionId, isActive])
-  @@index([sessionId, createdAt])
 }
 
 model ThemePillar {
@@ -298,14 +291,11 @@ model ThemePillar {
   name              String          @db.VarChar(255)
   rationale         String          @db.Text
   focusKeywords     String[]
+  color             String          @db.VarChar(20)
   orderIndex        Int
 
-  color             String?         @db.VarChar(7)
-
-  createdAt         DateTime        @default(now())
-
   strategy          ContentStrategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
-  calendarPosts     CalendarPost[]
+  posts             CalendarPost[]
 
   @@index([strategyId, orderIndex])
 }
@@ -398,7 +388,7 @@ model ValidationResult {
 }
 
 // ============================================
-// NEW: KEYWORD RESEARCH SYSTEM
+// NEW: KEYWORD RESEARCH SYSTEM (ENHANCED)
 // ============================================
 
 model KeywordResearch {
@@ -421,6 +411,13 @@ model KeywordResearch {
   totalClustersFound Int            @default(0)
   aiSelectedCount    Int            @default(0)
   userSelectedCount  Int            @default(0)
+  
+  // ========== NEW: OWN CONTENT ANALYSIS ==========
+  ownContentAnalyzed Boolean        @default(false)
+  totalBlogPosts     Int?           // Number of blog posts scraped
+  existingKeywordsCount Int?        // Number of keywords found in existing content
+  ownContentData     Json?          // Store detailed analysis: {existingKeywords: [], existingTopics: [], blogPosts: []}
+  // ===============================================
   
   // User Approval
   isApproved        Boolean         @default(false)
@@ -514,7 +511,7 @@ model Keyword {
   hasImagePack      Boolean         @default(false)
   hasLocalPack      Boolean         @default(false)
   
-  // Cannibalization Check
+  // Cannibalization Check (NOW REAL DATA FROM SCRAPING)
   isInExistingContent Boolean       @default(false)
   existingContentUrl  String?       @db.VarChar(2048)
   

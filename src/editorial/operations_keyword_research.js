@@ -126,6 +126,25 @@ async function executeResearchBackground(
       premiumAPIKey,
     });
 
+    // NEW: Process Own Content Analysis
+const ownContentAnalysis = researchResult.ownContentAnalysis || {
+  analyzed: false,
+  existingKeywords: new Set(),
+  existingTopics: new Set(),
+  totalPosts: 0,
+};
+
+// Convert Sets to Arrays for JSON storage
+const ownContentData = ownContentAnalysis.analyzed ? {
+  existingKeywords: Array.from(ownContentAnalysis.existingKeywords || []),
+  existingTopics: Array.from(ownContentAnalysis.existingTopics || []),
+  blogPosts: ownContentAnalysis.blogPosts || [],
+  analyzed: true,
+} : null;
+
+console.log(`[Keyword Research] Own content analyzed: ${ownContentAnalysis.analyzed}`);
+console.log(`[Keyword Research] Found ${ownContentAnalysis.totalPosts} blog posts`);
+
     // Save clusters and keywords to database
     // Use prisma directly instead of context.entities
     const savedClusters = [];
@@ -248,18 +267,23 @@ if (aiSelectedCount === 0 && allSavedKeywords.length > 0) {
 
     // Update research status
     await prisma.keywordResearch.update({
-      where: { id: researchId },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-        totalKeywordsFound: researchResult.totalKeywords,
-        totalClustersFound: researchResult.clusters.length,
-        aiSelectedCount,
-        aiModel: 'claude-sonnet-4-20250514',
-        tokenCount: null, // Could extract from researchResult
-        processingMs: researchResult.duration,
-      },
-    });
+  where: { id: researchId },
+  data: {
+    status: 'COMPLETED',
+    completedAt: new Date(),
+    totalKeywordsFound: researchResult.totalKeywords,
+    totalClustersFound: researchResult.clusters.length,
+    aiSelectedCount,
+    aiModel: 'claude-sonnet-4-20250514',
+    tokenCount: null,
+    processingMs: researchResult.duration,
+    // NEW FIELDS
+    ownContentAnalyzed: ownContentAnalysis.analyzed,
+    totalBlogPosts: ownContentAnalysis.totalPosts || 0,
+    existingKeywordsCount: ownContentAnalysis.existingKeywords?.size || 0,
+    ownContentData: ownContentData,
+  },
+});
 
     // Update project status
     await prisma.editorialProject.update({

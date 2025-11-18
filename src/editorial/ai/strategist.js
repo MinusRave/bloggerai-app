@@ -6,7 +6,7 @@ const anthropic = new Anthropic({
 });
 
 // ============================================
-// AI STRATEGIST V2 (WITH KEYWORD RESEARCH)
+// AI STRATEGIST V2 ENHANCED (WITH COMPETITIVE + OWN CONTENT ANALYSIS)
 // ============================================
 
 export async function generateStrategyFromKeywordResearch({
@@ -14,6 +14,8 @@ export async function generateStrategyFromKeywordResearch({
   keywordResearch,
   selectedClusters,
   selectedKeywords,
+  ownContentAnalysis = null,      // NEW: Own content data
+  competitorAnalysis = null,      // NEW: Competitor data
   conversationHistory = [],
   previousStrategy = null,
   userRequest = null,
@@ -22,18 +24,20 @@ export async function generateStrategyFromKeywordResearch({
   const startTime = Date.now();
 
   try {
-    const prompt = buildStrategyPromptV2({
+    const prompt = buildStrategyPromptV2Enhanced({
       projectContext,
       keywordResearch,
       selectedClusters,
       selectedKeywords,
+      ownContentAnalysis,
+      competitorAnalysis,
       conversationHistory,
       previousStrategy,
       userRequest,
       versionNumber,
     });
 
-    console.log('[AI Strategist V2] Generating strategy v' + versionNumber);
+    console.log('[AI Strategist V2 Enhanced] Generating strategy v' + versionNumber);
 
     const response = await anthropic.messages.create({
       model: process.env.AI_MODEL_STRATEGIST || 'claude-sonnet-4-20250514',
@@ -61,7 +65,7 @@ export async function generateStrategyFromKeywordResearch({
       },
     };
   } catch (error) {
-    console.error('[AI Strategist V2] Error:', error);
+    console.error('[AI Strategist V2 Enhanced] Error:', error);
 
     if (error.status === 401) {
       throw new EditorialError(
@@ -81,14 +85,16 @@ export async function generateStrategyFromKeywordResearch({
 }
 
 // ============================================
-// PROMPT BUILDER V2 (KEYWORD-DRIVEN)
+// PROMPT BUILDER V2 ENHANCED
 // ============================================
 
-function buildStrategyPromptV2({
+function buildStrategyPromptV2Enhanced({
   projectContext,
   keywordResearch,
   selectedClusters,
   selectedKeywords,
+  ownContentAnalysis,
+  competitorAnalysis,
   conversationHistory,
   previousStrategy,
   userRequest,
@@ -99,7 +105,7 @@ function buildStrategyPromptV2({
     ? projectContext.knowledgeBase.substring(0, 4000) + '...[truncated]'
     : projectContext.knowledgeBase;
 
-  let prompt = `You are an expert SEO strategist creating a data-driven editorial calendar.
+  let prompt = `You are an expert SEO strategist creating a data-driven editorial calendar optimized for MAXIMUM TRAFFIC.
 
 # PROJECT CONTEXT
 Name: ${projectContext.name}
@@ -110,22 +116,55 @@ Blog URL: ${projectContext.blogUrl || 'Not provided'}
 Main Site URL: ${projectContext.mainSiteUrl || 'Not provided'}
 First Publish Date: ${projectContext.firstPublishDate || 'Not specified'}
 
-# KNOWLEDGE BASE (source of truth - DO NOT invent facts not present here)
+# KNOWLEDGE BASE (Factual Grounding - 5% weight)
 ${knowledgeBase}
 
-# KEYWORD RESEARCH DATA (YOUR PRIMARY INPUT)
+# OWN CONTENT ANALYSIS (Content Gap Analysis - 25% weight)
+${formatOwnContentAnalysis(ownContentAnalysis)}
+
+# COMPETITOR ANALYSIS (Competitive Gaps - 20% weight)
+${formatCompetitorAnalysis(competitorAnalysis)}
+
+# KEYWORD RESEARCH DATA (Search Opportunity - 40% weight)
 
 ## Research Summary
 - Total Keywords Found: ${keywordResearch.totalKeywordsFound}
 - Total Clusters: ${keywordResearch.totalClustersFound}
 - Selected Clusters: ${selectedClusters.length}
 - Selected Keywords: ${selectedKeywords.length}
+- Keywords in Existing Content: ${selectedKeywords.filter(k => k.isInExistingContent).length}
 
 ## Selected Keyword Clusters
 ${formatSelectedClusters(selectedClusters)}
 
 ## All Selected Keywords (${selectedKeywords.length} total)
 ${formatSelectedKeywords(selectedKeywords)}
+
+# STRATEGIC PRIORITIES (How to weight your decisions)
+
+1. **Search Opportunity (40%)**: Prioritize keywords with:
+   - Low difficulty + high volume = quick wins
+   - Featured snippet opportunities
+   - High priority score clusters
+
+2. **Content Gaps (25%)**: Focus on:
+   - Keywords NOT in existing content (avoid cannibalization)
+   - Topics your competitors cover but you don't
+   - Underserved search intents in your niche
+
+3. **Competitive Advantage (20%)**: Target:
+   - Keywords competitors rank poorly for
+   - Questions competitors don't answer well
+   - Long-tail variations competitors miss
+
+4. **Business Alignment (10%)**: Ensure each post:
+   - Supports business objectives: ${projectContext.objectives}
+   - Serves target audience: ${projectContext.target}
+   - Moves users through funnel (60% ToF, 30% MoF, 10% BoF)
+
+5. **Brand Accuracy (5%)**: Keep content:
+   - Factually grounded in Knowledge Base
+   - Aligned with brand voice and positioning
 
 # CRITICAL CONSTRAINTS
 
@@ -141,7 +180,7 @@ ${
     ? `
 **CANNIBALIZATION PREVENTION IS MANDATORY:**
 - NEVER use keywords marked as "isInExistingContent: true"
-- If a keyword is already covered, skip it or use a long-tail variant
+- Focus on keywords that represent NEW content opportunities
 - Each primary keyword MUST be unique across the entire calendar
 - Flag any potential cannibalization risks in post rationale
 `
@@ -152,44 +191,43 @@ ${
 `
 }
 
-## 3. DATA-DRIVEN PRIORITIZATION
-Prioritize keywords with:
-- Lower difficulty + higher volume = quick wins
-- Featured snippet opportunities (hasFeaturedSnippet: true)
-- High priority score clusters
-- Balanced funnel distribution (60% ToF, 30% MoF, 10% BoF)
+## 3. CONTENT DIFFERENTIATION
+For each post, consider:
+- What angle competitors HAVEN'T taken
+- What questions competitors answer poorly
+- How to provide MORE value than existing content
 
 ## 4. PILLAR CREATION FROM CLUSTERS
 - Create 3-5 thematic pillars directly from the selected clusters
 - Each pillar = one or more related clusters
 - Pillar names should be clear, business-relevant, and SEO-focused
-- Distribute 30 posts proportionally across pillars based on keyword count
+- Distribute 30 posts proportionally across pillars based on:
+  * Keyword opportunity (volume/difficulty)
+  * Content gap size
+  * Business priority
 
 # YOUR TASK
 
 Create a comprehensive SEO editorial strategy with:
 
-1. **3-5 Thematic Pillars** (derived from clusters)
-   - Each pillar has: name, rationale (MAX 150 chars), focus keywords (from cluster), color, orderIndex
+1. **3-5 Thematic Pillars** (derived from clusters + gap analysis)
+   - Each pillar has: name, rationale (MAX 150 chars), focus keywords, color, orderIndex
 
 2. **30 Blog Posts** distributed across pillars
    - Each post MUST include:
      * Pillar assignment (by index 0-4)
      * Title (compelling, SEO-optimized, includes primary keyword naturally)
-     * Primary keyword (from selected list, MUST BE UNIQUE)
+     * Primary keyword (from selected list, MUST BE UNIQUE, NOT in existing content)
      * Secondary keywords (2-4 from same/related clusters)
      * Search intent (from keyword data: INFORMATIONAL, NAVIGATIONAL, TRANSACTIONAL, COMMERCIAL)
      * Funnel stage (from keyword data: ToF, MoF, BoF)
-     * Rationale (MAX 120 chars: vol + diff + SERP features + quick impact note)
+     * Rationale (MAX 120 chars: vol + diff + gap/opportunity + competitive angle)
      * Publish date (distributed over 30 days starting ${projectContext.firstPublishDate || 'today'})
      * Internal link suggestions (2-4 links to other posts, use postIndex 0-29)
      * External link suggestions (2-3 authoritative sources)
      * Keyword metrics summary (volume, difficulty, SERP features from research data)
 
-`;
-
-  if (previousStrategy && userRequest) {
-    prompt += `
+${previousStrategy && userRequest ? `
 # PREVIOUS STRATEGY (v${versionNumber - 1})
 Global Rationale: ${previousStrategy.globalRationale}
 
@@ -203,20 +241,18 @@ Primary Keywords Used: ${previousStrategy.posts.map((p) => p.primaryKeyword).joi
 "${userRequest}"
 
 IMPORTANT: Modify the strategy according to user request. Explain changes in changesSummary (MAX 200 chars). Maintain keyword uniqueness.
-`;
-  }
+` : ''}
 
-  prompt += `
 # JSON GENERATION RULES (CRITICAL FOR VALID OUTPUT)
 
 Your response MUST be valid, complete JSON:
 1. Ensure ALL strings are properly escaped (use \\" for quotes inside strings)
 2. Do NOT truncate the response - complete all 30 posts
 3. Keep ALL text fields concise to avoid token limits:
-   - globalRationale: MAX 400 chars
-   - identifiedGaps: MAX 300 chars
+   - globalRationale: MAX 400 chars (explain prioritization logic)
+   - identifiedGaps: MAX 300 chars (list key opportunities)
    - pillar rationale: MAX 150 chars each
-   - post rationale: MAX 120 chars each
+   - post rationale: MAX 120 chars each (vol, diff, gap/competitive angle)
 4. If approaching token limits, prioritize completing the JSON structure over verbose explanations
 5. Do NOT include any text before the opening { or after the closing }
 6. Use only ASCII characters in rationale text - avoid special unicode characters
@@ -228,12 +264,12 @@ Respond with a valid JSON object in this EXACT format (NO markdown, NO backticks
 
 {
   "versionNumber": ${versionNumber},
-  "globalRationale": "Overall strategy in 2-3 sentences MAX 400 chars: cluster-to-pillar logic, keyword distribution, expected outcomes",
-  "identifiedGaps": "Opportunities vs competitors, underserved topics MAX 300 chars",
+  "globalRationale": "Strategy prioritizes content gaps + quick wins. Cluster distribution: X% gap-filling, Y% competitor-targeting, Z% quick wins. Expected traffic: [estimate] MAX 400 chars",
+  "identifiedGaps": "Key opportunities: [list 3-5 specific gaps vs competitors/own content] MAX 300 chars",
   "pillars": [
     {
-      "name": "Pillar Name (derived from cluster)",
-      "rationale": "Strategic importance MAX 150 chars",
+      "name": "Pillar Name (gap-focused or cluster-based)",
+      "rationale": "Why important + gap it fills MAX 150 chars",
       "focusKeywords": ["keyword1", "keyword2", "keyword3"],
       "orderIndex": 0,
       "color": "#3B82F6"
@@ -243,12 +279,12 @@ Respond with a valid JSON object in this EXACT format (NO markdown, NO backticks
     {
       "pillarIndex": 0,
       "publishDate": "2025-01-20",
-      "title": "SEO-Optimized Title Including Primary Keyword",
-      "primaryKeyword": "exact keyword from research (must be unique)",
+      "title": "SEO Title with Primary Keyword",
+      "primaryKeyword": "exact keyword from research (unique, NOT in existing)",
       "secondaryKeywords": ["secondary1", "secondary2", "secondary3"],
       "searchIntent": "INFORMATIONAL",
       "funnelStage": "ToF",
-      "rationale": "Vol: X Diff: Y SERP: Z Impact note MAX 120 chars",
+      "rationale": "Vol:X Diff:Y Gap:competitor weakness Opp:FS MAX 120 chars",
       "keywordMetrics": {
         "volume": 1200,
         "difficulty": "MEDIUM",
@@ -257,35 +293,82 @@ Respond with a valid JSON object in this EXACT format (NO markdown, NO backticks
         "priorityScore": 75.5
       },
       "internalLinks": [
-        {"postIndex": 5, "anchorText": "related article about X"},
-        {"postIndex": 12, "anchorText": "our guide to Y"}
+        {"postIndex": 5, "anchorText": "related topic"},
+        {"postIndex": 12, "anchorText": "guide to X"}
       ],
       "externalLinks": [
-        {"url": "https://example.com/resource", "anchorText": "authoritative source", "reason": "Industry research"}
+        {"url": "https://example.com", "anchorText": "source", "reason": "Authority"}
       ]
     }
   ],
-  "changesSummary": "If modification: what changed and why MAX 200 chars"
+  "changesSummary": "If modification: changes and why MAX 200 chars"
 }
 
 # CRITICAL REMINDERS
-- All 30 posts MUST have UNIQUE primary keywords (check the selected keywords list)
+- All 30 posts MUST have UNIQUE primary keywords NOT in existing content
 - Use ONLY keywords from the research data provided
-- Include actual keyword metrics in each post's keywordMetrics field
-- Distribute posts evenly across pillars based on cluster keyword counts
-- Start dates from ${projectContext.firstPublishDate || 'today'} and spread over 30 days
-- EVERY post must have 2-4 internal links and 2-3 external links
-- Each post rationale must be ULTRA CONCISE: just metrics + quick impact note (MAX 120 chars)
-- Prioritize quick wins early in calendar (low difficulty + high opportunity)
+- Prioritize keywords that fill content gaps or target competitive weaknesses
+- Each post rationale MUST reference: volume, difficulty, gap/opportunity, competitive angle
+- Distribute posts: quick wins early (low diff, high vol, gap), build authority over time
 - KEEP ALL TEXT CONCISE TO ENSURE COMPLETE JSON OUTPUT
+- Focus on TRAFFIC POTENTIAL above all else
 `;
 
   return prompt;
 }
 
 // ============================================
-// CLUSTER & KEYWORD FORMATTERS
+// FORMATTING HELPERS
 // ============================================
+
+function formatOwnContentAnalysis(ownContent) {
+  if (!ownContent || !ownContent.analyzed) {
+    return `No own content analysis available (blog scraping skipped or failed)`;
+  }
+
+  const topExistingKeywords = Array.from(ownContent.existingKeywords || [])
+    .slice(0, 30)
+    .join(', ');
+
+  const topExistingTopics = Array.from(ownContent.existingTopics || [])
+    .slice(0, 20)
+    .join(', ');
+
+  return `
+**Blog Content Analyzed:**
+- Total Posts: ${ownContent.totalPosts}
+- Keywords Already Covered: ${ownContent.existingKeywords?.size || 0}
+- Top Existing Keywords: ${topExistingKeywords}
+- Topics Covered: ${topExistingTopics}
+
+**Content Gap Strategy:**
+- Focus on keywords NOT in the existing keywords list above
+- Identify underserved topics that complement existing content
+- Avoid duplicate coverage unless adding significant new value
+`;
+}
+
+function formatCompetitorAnalysis(competitorAnalysis) {
+  if (!competitorAnalysis || competitorAnalysis.length === 0) {
+    return `No competitor analysis available`;
+  }
+
+  return `
+**Competitors Analyzed:** ${competitorAnalysis.length}
+
+${competitorAnalysis.map((comp, i) => `
+Competitor ${i + 1}: ${comp.url}
+- Page Title: ${comp.pageTitle || 'N/A'}
+- Main Topics: ${comp.h1Titles?.slice(0, 3).join(', ') || 'N/A'}
+- Keywords Found: ${comp.extractedKeywords?.slice(0, 10).join(', ') || 'N/A'}
+`).join('\n')}
+
+**Competitive Gaps to Exploit:**
+- Find keywords competitors mention but don't rank for
+- Identify questions competitors answer poorly
+- Target long-tail variations competitors miss
+`;
+}
 
 function formatSelectedClusters(clusters) {
   return clusters
@@ -333,25 +416,25 @@ function formatSelectedKeywords(keywords) {
 }
 
 // ============================================
-// RESPONSE PARSER V2 (IMPROVED)
+// RESPONSE PARSER V2
 // ============================================
 
 function parseStrategyResponseV2(aiResponseText, expectedVersion) {
   try {
     let jsonText = aiResponseText.trim();
     
-    // Remove markdown code blocks more aggressively
+    // Strip all markdown code block variants
+    jsonText = jsonText.replace(/^```json\s*/i, '');
+    jsonText = jsonText.replace(/^```\s*/i, '');
+    jsonText = jsonText.replace(/\s*```$/i, '');
+    jsonText = jsonText.trim();
+    
+    // More aggressive cleaning
     jsonText = jsonText.replace(/^```(?:json)?\s*/gm, '');
     jsonText = jsonText.replace(/```\s*$/gm, '');
     jsonText = jsonText.trim();
     
-    // If still wrapped in backticks, extract
-    const jsonMatch = jsonText.match(/^```(?:json)?\s*([\s\S]+?)\s*```$/);
-    if (jsonMatch) {
-      jsonText = jsonMatch[1].trim();
-    }
-    
-    // Try to find JSON object boundaries if response is truncated
+    // Try to find JSON object boundaries if truncated
     const firstBrace = jsonText.indexOf('{');
     const lastBrace = jsonText.lastIndexOf('}');
     
@@ -371,7 +454,6 @@ function parseStrategyResponseV2(aiResponseText, expectedVersion) {
       throw new Error('No posts defined in strategy');
     }
 
-    // Check for duplicate primary keywords
     const keywordCounts = new Map();
     parsed.posts.forEach((post) => {
       const pk = post.primaryKeyword.toLowerCase();
@@ -380,10 +462,9 @@ function parseStrategyResponseV2(aiResponseText, expectedVersion) {
 
     const duplicates = Array.from(keywordCounts.entries()).filter(([_, count]) => count > 1);
     if (duplicates.length > 0) {
-      console.warn('[AI Strategist V2] Duplicate primary keywords detected:', duplicates);
+      console.warn('[AI Strategist V2] Duplicate primary keywords:', duplicates);
     }
 
-    // Normalize posts
     parsed.posts = parsed.posts.map((post) => ({
       ...post,
       publishDate: new Date(post.publishDate),
@@ -399,7 +480,6 @@ function parseStrategyResponseV2(aiResponseText, expectedVersion) {
       funnelStage: post.funnelStage || 'ToF',
     }));
 
-    // Normalize pillars
     parsed.pillars = parsed.pillars.map((pillar, index) => ({
       ...pillar,
       color: pillar.color || getDefaultPillarColor(index),
@@ -408,8 +488,8 @@ function parseStrategyResponseV2(aiResponseText, expectedVersion) {
 
     return {
       versionNumber: expectedVersion,
-      globalRationale: parsed.globalRationale || 'No rationale provided',
-      identifiedGaps: parsed.identifiedGaps || 'No gaps identified',
+      globalRationale: parsed.globalRationale,
+      identifiedGaps: parsed.identifiedGaps,
       pillars: parsed.pillars,
       posts: parsed.posts,
       changesSummary: parsed.changesSummary || null,
@@ -417,17 +497,12 @@ function parseStrategyResponseV2(aiResponseText, expectedVersion) {
   } catch (error) {
     console.error('[AI Strategist V2] Parse failed:', error);
     console.error('Response preview:', aiResponseText.substring(0, 500));
-    console.error('Response end:', aiResponseText.substring(aiResponseText.length - 500));
 
     throw new EditorialError(
       'Failed to parse AI strategy response. Invalid JSON format.',
       ErrorCodes.AI_SERVICE_ERROR,
       500,
-      { 
-        parsingError: error.message, 
-        rawResponseStart: aiResponseText.substring(0, 500),
-        rawResponseEnd: aiResponseText.substring(Math.max(0, aiResponseText.length - 500))
-      }
+      { parsingError: error.message, rawResponse: aiResponseText.substring(0, 500) }
     );
   }
 }
@@ -448,31 +523,4 @@ function getDefaultPillarColor(index) {
     '#F97316', // orange
   ];
   return colors[index % colors.length];
-}
-
-// ============================================
-// LEGACY FALLBACK (if no keyword research)
-// ============================================
-
-export async function generateStrategyLegacy({
-  projectContext,
-  researchResults,
-  conversationHistory = [],
-  previousStrategy = null,
-  userRequest = null,
-  versionNumber = 1,
-}) {
-  // This is the old strategist.js logic
-  // Keep for backward compatibility if user generates strategy without keyword research
-  
-  console.warn('[AI Strategist] Using legacy mode (no keyword research). Consider running keyword research first.');
-
-  // Use old prompt from original strategist.js
-  // (Copy exact logic from your uploaded strategist.js)
-  
-  throw new EditorialError(
-    'Legacy strategy generation not implemented. Please run keyword research first.',
-    ErrorCodes.INVALID_INPUT,
-    400
-  );
 }

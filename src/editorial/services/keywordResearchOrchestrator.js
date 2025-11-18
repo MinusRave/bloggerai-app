@@ -8,6 +8,7 @@ import {
   estimateVolumeFree,
 } from './keywordResearchFree.js';
 import { researchKeywordsPremium } from './keywordResearchPremium.js';
+import { analyzeOwnContent, isKeywordInExistingContent } from './ownContentAnalyzer.js';
 import { EditorialError, ErrorCodes } from '../types.js';
 
 const anthropic = new Anthropic({
@@ -15,7 +16,7 @@ const anthropic = new Anthropic({
 });
 
 // ============================================
-// MAIN ORCHESTRATOR
+// MAIN ORCHESTRATOR (ENHANCED)
 // ============================================
 
 export async function executeKeywordResearch({
@@ -30,7 +31,7 @@ export async function executeKeywordResearch({
   console.log('[Keyword Research] Starting research...');
 
   try {
-    // STEP 1: Expand keywords using free tools
+    // STEP 1: Expand keywords using free tools + analyze own content
     const freeResults = await executeFreeResearch(projectContext);
 
     // Aggregate all unique keywords
@@ -39,6 +40,7 @@ export async function executeKeywordResearch({
     freeResults.trendingKeywords.forEach((k) => allKeywords.add(k.toLowerCase()));
 
     console.log(`[Keyword Research] Found ${allKeywords.size} unique keywords from free tools`);
+    console.log(`[Keyword Research] Own content: ${freeResults.ownContent.totalPosts || 0} posts analyzed`);
 
     // STEP 2: Enrich with premium data (if enabled)
     let premiumResults = null;
@@ -61,10 +63,11 @@ export async function executeKeywordResearch({
 
     console.log(`[Keyword Research] Merged ${mergedKeywords.length} keywords with full data`);
 
-    // STEP 4: Classify keywords (intent, funnel, cannibalization)
+    // STEP 4: Classify keywords (with REAL cannibalization check)
     const classifiedKeywords = await classifyKeywords(
       mergedKeywords,
-      projectContext
+      projectContext,
+      freeResults.ownContent // NEW: Pass own content data
     );
 
     // STEP 5: AI Clustering
@@ -76,7 +79,11 @@ export async function executeKeywordResearch({
     console.log(`[Keyword Research] Created ${clusters.length} clusters`);
 
     // STEP 6: AI Selection (optimal keywords per cluster)
-    const selectedClusters = await selectOptimalKeywords(clusters, projectContext);
+    const selectedClusters = await selectOptimalKeywords(
+      clusters,
+      projectContext,
+      freeResults.ownContent // NEW: Pass own content data for gap analysis
+    );
 
     const duration = Date.now() - startTime;
 
@@ -85,6 +92,7 @@ export async function executeKeywordResearch({
       duration,
       totalKeywords: mergedKeywords.length,
       clusters: selectedClusters,
+      ownContentAnalysis: freeResults.ownContent, // NEW: Include in results
       rawData: {
         freeResults,
         premiumResults,
@@ -103,13 +111,13 @@ export async function executeKeywordResearch({
 }
 
 // ============================================
-// STEP 1: FREE RESEARCH
+// STEP 1: FREE RESEARCH (ENHANCED)
 // ============================================
 
 async function executeFreeResearch(projectContext) {
-  const { keywordSeed, competitorUrls, language, target, objectives } = projectContext;
+  const { keywordSeed, competitorUrls, blogUrl, mainSiteUrl, language, target, objectives } = projectContext;
 
-  const [googleSuggest, serpFeatures, redditTrends, competitorData] =
+  const [googleSuggest, serpFeatures, redditTrends, competitorData, ownContentData] =
     await Promise.allSettled([
       keywordSeed.length > 0
         ? expandKeywordsGoogleSuggest(keywordSeed, language)
@@ -121,6 +129,10 @@ async function executeFreeResearch(projectContext) {
       competitorUrls.length > 0
         ? scrapeCompetitorKeywords(competitorUrls.slice(0, 3))
         : Promise.resolve([]),
+      // NEW: Analyze user's own blog
+      blogUrl
+        ? analyzeOwnContent(blogUrl, mainSiteUrl)
+        : Promise.resolve({ analyzed: false, existingKeywords: new Set(), existingTopics: new Set(), totalPosts: 0 }),
     ]);
 
   // Extract keywords
@@ -140,11 +152,18 @@ async function executeFreeResearch(projectContext) {
     ? competitorData.value.flatMap((comp) => comp.extractedKeywords || [])
     : [];
 
+  // Extract own content data
+  const ownContent = ownContentData.status === 'fulfilled'
+    ? ownContentData.value
+    : { analyzed: false, existingKeywords: new Set(), existingTopics: new Set(), totalPosts: 0 };
+
   return {
     expandedKeywords,
     serpFeatures: serpFeaturesData,
     trendingKeywords,
     competitorKeywords,
+    competitorData: competitorData.status === 'fulfilled' ? competitorData.value : [], // NEW: Keep full competitor data
+    ownContent, // NEW: Return own content analysis
   };
 }
 
@@ -249,11 +268,11 @@ function mergeKeywordData(allKeywords, serpFeatures, premiumResults) {
 }
 
 // ============================================
-// STEP 4: CLASSIFY KEYWORDS
+// STEP 4: CLASSIFY KEYWORDS (ENHANCED)
 // ============================================
 
-async function classifyKeywords(keywords, projectContext) {
-  const prompt = buildClassificationPrompt(keywords, projectContext);
+async function classifyKeywords(keywords, projectContext, ownContent) {
+  const prompt = buildClassificationPrompt(keywords, projectContext, ownContent);
 
   const response = await anthropic.messages.create({
     model: process.env.AI_MODEL_COORDINATOR || 'claude-sonnet-4-20250514',
@@ -263,18 +282,20 @@ async function classifyKeywords(keywords, projectContext) {
 
   const classifications = parseClassificationResponse(response.content[0].text);
 
-  // Merge classifications with keywords
-  return keywords.map((kw) => {
-    const classification = classifications.find(
-      (c) => c.keyword.toLowerCase() === kw.keyword.toLowerCase()
+  // Merge with actual cannibalization data
+  return classifications.map(classification => {
+    const cannibalizationCheck = isKeywordInExistingContent(
+      classification.keyword,
+      ownContent.existingKeywords || new Set(),
+      ownContent.existingTopics || new Set()
     );
 
     return {
-      ...kw,
-      searchIntent: classification?.searchIntent || 'INFORMATIONAL',
-      funnelStage: classification?.funnelStage || 'ToF',
-      isInExistingContent: classification?.isInExistingContent || false,
-      existingContentUrl: classification?.existingContentUrl || null,
+      ...classification,
+      isInExistingContent: cannibalizationCheck.isCovered,
+      existingContentUrl: cannibalizationCheck.matchedTopic
+        ? `Topic overlap: ${cannibalizationCheck.matchedTopic}`
+        : null,
     };
   });
 }
@@ -329,11 +350,11 @@ async function clusterKeywordsWithAI(keywords, projectContext) {
 }
 
 // ============================================
-// STEP 6: AI SELECTION
+// STEP 6: AI SELECTION (ENHANCED)
 // ============================================
 
-async function selectOptimalKeywords(clusters, projectContext) {
-  const prompt = buildSelectionPrompt(clusters, projectContext);
+async function selectOptimalKeywords(clusters, projectContext, ownContent) {
+  const prompt = buildSelectionPrompt(clusters, projectContext, ownContent);
 
   const response = await anthropic.messages.create({
     model: process.env.AI_MODEL_STRATEGIST || 'claude-sonnet-4-20250514',
@@ -363,14 +384,27 @@ async function selectOptimalKeywords(clusters, projectContext) {
 }
 
 // ============================================
-// PROMPT BUILDERS
+// PROMPT BUILDERS (ENHANCED)
 // ============================================
 
-function buildClassificationPrompt(keywords, projectContext) {
+function buildClassificationPrompt(keywords, projectContext, ownContent) {
+  const existingKeywordsList = ownContent.analyzed && ownContent.existingKeywords
+    ? Array.from(ownContent.existingKeywords).slice(0, 50).join(', ')
+    : 'None analyzed';
+
+  const existingTopicsList = ownContent.analyzed && ownContent.existingTopics
+    ? Array.from(ownContent.existingTopics).slice(0, 20).join(', ')
+    : 'None analyzed';
+
   return `You are an SEO expert classifying keywords for an editorial calendar project.
 
 # PROJECT CONTEXT
 ${JSON.stringify(projectContext, null, 2)}
+
+# EXISTING CONTENT ANALYSIS
+Blog Posts Analyzed: ${ownContent.totalPosts || 0}
+Existing Keywords: ${existingKeywordsList}
+Topics Already Covered: ${existingTopicsList}
 
 # KEYWORDS TO CLASSIFY (${keywords.length} total)
 ${keywords.slice(0, 200).map((k) => k.keyword).join('\n')}
@@ -379,7 +413,8 @@ ${keywords.slice(0, 200).map((k) => k.keyword).join('\n')}
 For each keyword, classify:
 1. **Search Intent**: INFORMATIONAL, NAVIGATIONAL, TRANSACTIONAL, COMMERCIAL
 2. **Funnel Stage**: ToF (awareness), MoF (consideration), BoF (decision)
-3. **Cannibalization Check**: Does this keyword already exist in blog/main site content?
+
+NOTE: Cannibalization will be checked programmatically using the existing content data above.
 
 # OUTPUT FORMAT
 Respond with valid JSON array:
@@ -388,9 +423,7 @@ Respond with valid JSON array:
   {
     "keyword": "keyword phrase",
     "searchIntent": "INFORMATIONAL",
-    "funnelStage": "ToF",
-    "isInExistingContent": false,
-    "existingContentUrl": null
+    "funnelStage": "ToF"
   }
 ]
 \`\`\``;
@@ -431,11 +464,16 @@ Each cluster should:
 \`\`\``;
 }
 
-function buildSelectionPrompt(clusters, projectContext) {
+function buildSelectionPrompt(clusters, projectContext, ownContent) {
+  const contentGapNote = ownContent.analyzed
+    ? `\nCONTENT GAPS: Focus on keywords NOT in existing content. Blog has ${ownContent.totalPosts} posts covering ${ownContent.existingKeywords?.size || 0} keywords.`
+    : '';
+
   return `You are an SEO strategist selecting optimal keywords for a 30-post editorial calendar.
 
 # PROJECT CONTEXT
 ${JSON.stringify(projectContext, null, 2)}
+${contentGapNote}
 
 # KEYWORD CLUSTERS (${clusters.length} clusters, ${clusters.reduce((sum, c) => sum + c.totalKeywords, 0)} keywords)
 ${clusters.map((c) => `
@@ -450,9 +488,9 @@ ${clusters.map((c) => `
 # YOUR TASK
 Select the BEST keywords for a 30-post strategy:
 1. **Prioritize quick wins**: Low difficulty + high opportunity
-2. **Balance funnel coverage**: 60% ToF, 30% MoF, 10% BoF
-3. **Ensure cluster representation**: Each important cluster should have keywords selected
-4. **Avoid cannibalization**: Skip keywords already in existing content
+2. **Fill content gaps**: Keywords NOT in existing content
+3. **Balance funnel coverage**: 60% ToF, 30% MoF, 10% BoF
+4. **Ensure cluster representation**: Each important cluster should have keywords selected
 5. **Consider SERP features**: Featured snippets = opportunity
 
 Total to select: ~80-120 keywords (will be distributed across 30 posts)
@@ -463,7 +501,7 @@ Total to select: ~80-120 keywords (will be distributed across 30 posts)
   {
     "clusterName": "Cluster Name",
     "isSelected": true/false,
-    "rationale": "Why selected/rejected",
+    "rationale": "Why selected/rejected (mention content gaps if relevant)",
     "selectedKeywords": ["keyword1", "keyword2", ...]
   }
 ]
