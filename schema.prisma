@@ -1,0 +1,578 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================
+// OPENSAAS ORIGINAL MODELS (mantenuti)
+// ============================================
+
+model User {
+  id                        String          @id @default(uuid())
+  createdAt                 DateTime        @default(now())
+
+  email                     String?         @unique
+  username                  String?         @unique
+  isAdmin                   Boolean         @default(false)
+
+  paymentProcessorUserId    String?         @unique
+  lemonSqueezyCustomerPortalUrl String?
+  subscriptionStatus        String?
+  subscriptionPlan          String?
+  datePaid                  DateTime?
+  credits                   Int             @default(3)
+
+  // OpenSaaS relations
+  gptResponses              GptResponse[]
+  contactFormMessages       ContactFormMessage[]
+  tasks                     Task[]
+  files                     File[]
+  
+  // Editorial Projects relation
+  editorialProjects         EditorialProject[]
+  
+  // NEW: API Keys for premium tools
+  apiKeys                   UserAPIKey[]
+}
+
+model GptResponse {
+  id                        String          @id @default(uuid())
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+
+  user                      User            @relation(fields: [userId], references: [id])
+  userId                    String
+
+  content                   String
+}
+
+model Task {
+  id                        String          @id @default(uuid())
+  createdAt                 DateTime        @default(now())
+
+  user                      User            @relation(fields: [userId], references: [id])
+  userId                    String
+
+  description               String
+  time                      String          @default("1")
+  isDone                    Boolean         @default(false)
+}
+
+model File {
+  id                        String          @id @default(uuid())
+  createdAt                 DateTime        @default(now())
+
+  user                      User            @relation(fields: [userId], references: [id])
+  userId                    String
+
+  name                      String
+  type                      String
+  key                       String
+  uploadUrl                 String
+}
+
+model DailyStats {
+  id                               Int             @id @default(autoincrement())
+  date                             DateTime        @default(now()) @unique
+
+  totalViews                       Int             @default(0)
+  prevDayViewsChangePercent        String          @default("0")
+  userCount                        Int             @default(0)
+  paidUserCount                    Int             @default(0)
+  userDelta                        Int             @default(0)
+  paidUserDelta                    Int             @default(0)
+  totalRevenue                     Float           @default(0)
+  totalProfit                      Float           @default(0)
+
+  sources                          PageViewSource[]
+}
+
+model PageViewSource {
+  @@id([date, name])
+  name                     String
+  date                     DateTime        @default(now())
+
+  dailyStats               DailyStats?     @relation(fields: [dailyStatsId], references: [id])
+  dailyStatsId             Int?
+
+  visitors                 Int
+}
+
+model Logs {
+  id                       Int             @id @default(autoincrement())
+  createdAt                DateTime        @default(now())
+
+  message                  String
+  level                    String
+}
+
+model ContactFormMessage {
+  id                        String          @id @default(uuid())
+  createdAt                 DateTime        @default(now())
+
+  user                      User            @relation(fields: [userId], references: [id])
+  userId                    String
+
+  content                   String
+  isRead                    Boolean         @default(false)
+  repliedAt                 DateTime?
+}
+
+// ============================================
+// EDITORIAL CALENDAR SYSTEM
+// ============================================
+
+model EditorialProject {
+  id                Int             @id @default(autoincrement())
+  userId            String
+
+  // Metadata core
+  name              String          @db.VarChar(255)
+  description       String          @db.Text
+  language          String          @db.VarChar(10)
+  target            String          @db.Text
+  objectives        String          @db.Text
+
+  // External references
+  blogUrl           String?         @db.VarChar(2048)
+  mainSiteUrl       String?         @db.VarChar(2048)
+  competitorUrls    String[]
+  keywordSeed       String[]
+
+  // Publishing settings
+  firstPublishDate  DateTime         @default(now()) @db.Date
+  avoidCannibalization Boolean      @default(true)
+
+  // Knowledge Base
+  knowledgeBase     String          @db.Text
+
+  // State machine
+  status            ProjectStatus   @default(DRAFT)
+
+  // Audit
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  archivedAt        DateTime?
+
+  // Relations
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategySessions  StrategySession[]
+  
+  // NEW: Keyword Research
+  keywordResearches KeywordResearch[]
+
+  @@index([userId, status])
+  @@index([createdAt])
+  @@index([archivedAt])
+}
+
+enum ProjectStatus {
+  DRAFT
+  RESEARCH_PENDING   // NEW: waiting for keyword research
+  RESEARCH_READY     // NEW: research completed, ready for selection
+  STRATEGY_READY
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+model StrategySession {
+  id                Int             @id @default(autoincrement())
+  projectId         Int
+
+  status            SessionStatus   @default(ACTIVE)
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  completedAt       DateTime?
+
+  project           EditorialProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages          StrategyMessage[]
+  contentStrategies ContentStrategy[]
+  researchResults   ResearchResult[]
+
+  @@index([projectId, status])
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+model StrategyMessage {
+  id                Int             @id @default(autoincrement())
+  sessionId         Int
+
+  role              MessageRole
+  content           String          @db.Text
+
+  // AI metadata
+  aiModel           String?         @db.VarChar(100)
+  tokenCount        Int?
+  processingMs      Int?
+
+  timestamp         DateTime        @default(now())
+
+  session           StrategySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, timestamp])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model ResearchResult {
+  id                Int             @id @default(autoincrement())
+  sessionId         Int
+
+  researchType      ResearchType
+  query             String?         @db.VarChar(500)
+  targetUrls        String[]
+
+  results           Json
+  rationale         String          @db.Text
+  toolsUsed         String[]
+
+  expiresAt         DateTime
+  createdAt         DateTime        @default(now())
+
+  session           StrategySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, researchType])
+  @@index([expiresAt])
+}
+
+enum ResearchType {
+  KEYWORD_EXPANSION
+  COMPETITOR_ANALYSIS
+  TRENDING_TOPICS
+  SEARCH_VOLUME
+  CONTENT_GAP
+}
+
+model ContentStrategy {
+  id                    Int             @id @default(autoincrement())
+  sessionId             Int
+  versionNumber         Int
+
+  globalRationale       String          @db.Text
+  identifiedGaps        String          @db.Text
+  coveragePeriodDays    Int             @default(30)
+
+  // Activation control
+  isActive              Boolean         @default(false)
+  activatedAt           DateTime?
+  replacedBy            Int?
+  replacedAt            DateTime?
+
+  // AI metadata
+  aiModel               String          @db.VarChar(100)
+  tokenCount            Int?
+  processingMs          Int?
+
+  createdAt             DateTime        @default(now())
+
+  session               StrategySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  themePillars          ThemePillar[]
+  calendarPosts         CalendarPost[]
+  replacedByStrategy    ContentStrategy? @relation("StrategyReplacement", fields: [replacedBy], references: [id])
+  replacements          ContentStrategy[] @relation("StrategyReplacement")
+
+  @@unique([sessionId, versionNumber])
+  @@index([sessionId, isActive])
+  @@index([sessionId, createdAt])
+}
+
+model ThemePillar {
+  id                Int             @id @default(autoincrement())
+  strategyId        Int
+
+  name              String          @db.VarChar(255)
+  rationale         String          @db.Text
+  focusKeywords     String[]
+  orderIndex        Int
+
+  color             String?         @db.VarChar(7)
+
+  createdAt         DateTime        @default(now())
+
+  strategy          ContentStrategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  calendarPosts     CalendarPost[]
+
+  @@index([strategyId, orderIndex])
+}
+
+model CalendarPost {
+  id                    Int             @id @default(autoincrement())
+  strategyId            Int
+  pillarId              Int
+
+  publishDate           DateTime        @db.Date
+  title                 String          @db.VarChar(500)
+  primaryKeyword        String          @db.VarChar(255)
+  secondaryKeywords     String[]
+  searchIntent          SearchIntent
+  rationale             String          @db.Text
+
+  // Linking suggestions
+  internalLinkSuggestions Json          @default("[]")
+  externalLinkSuggestions Json          @default("[]")
+
+  confidenceLevel       ConfidenceLevel
+  warningFlags          Json            @default("[]")
+
+  status                PostStatus      @default(PROPOSED)
+  manuallyEdited        Boolean         @default(false)
+  rejectionReason       String?         @db.Text
+
+  aiModel               String?         @db.VarChar(100)
+  
+  // NEW: Link to keyword research
+  keywordId             Int?
+
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  approvedAt            DateTime?
+
+  strategy              ContentStrategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  pillar                ThemePillar     @relation(fields: [pillarId], references: [id], onDelete: Restrict)
+  validations           ValidationResult[]
+  
+  // NEW: Relation to keyword
+  keyword               Keyword?        @relation(fields: [keywordId], references: [id])
+
+  @@index([strategyId, publishDate])
+  @@index([pillarId])
+  @@index([status])
+  @@index([keywordId])
+}
+
+enum SearchIntent {
+  INFORMATIONAL
+  NAVIGATIONAL
+  TRANSACTIONAL
+  COMMERCIAL
+}
+
+enum ConfidenceLevel {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum PostStatus {
+  PROPOSED
+  APPROVED
+  MODIFIED
+  REJECTED
+}
+
+model ValidationResult {
+  id                Int             @id @default(autoincrement())
+  postId            Int
+
+  isValid           Boolean
+  warnings          Json            @default("[]")
+  confidenceLevel   ConfidenceLevel
+
+  aiModel           String          @db.VarChar(100)
+  tokenCount        Int?
+  processingMs      Int?
+
+  kbSnapshot        String          @db.Text
+
+  validatedAt       DateTime        @default(now())
+  wasRevalidated    Boolean         @default(false)
+
+  post              CalendarPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, validatedAt])
+}
+
+// ============================================
+// NEW: KEYWORD RESEARCH SYSTEM
+// ============================================
+
+model KeywordResearch {
+  id                Int             @id @default(autoincrement())
+  projectId         Int
+  
+  // Research Configuration
+  useFreeTool       Boolean         @default(true)
+  usePremiumAPI     Boolean         @default(false)
+  premiumProvider   String?         @db.VarChar(50) // "datafoerseo" | "ahrefs" | "semrush"
+  
+  // Research Status
+  status            ResearchStatus  @default(PENDING)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  errorMessage      String?         @db.Text
+  
+  // Research Metadata
+  totalKeywordsFound Int            @default(0)
+  totalClustersFound Int            @default(0)
+  aiSelectedCount    Int            @default(0)
+  userSelectedCount  Int            @default(0)
+  
+  // User Approval
+  isApproved        Boolean         @default(false)
+  approvedAt        DateTime?
+  
+  // AI Metadata
+  aiModel           String?         @db.VarChar(100)
+  tokenCount        Int?
+  processingMs      Int?
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  project           EditorialProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clusters          KeywordCluster[]
+  
+  @@index([projectId])
+  @@index([status])
+  @@index([isApproved])
+}
+
+enum ResearchStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  APPROVED
+}
+
+model KeywordCluster {
+  id                Int             @id @default(autoincrement())
+  researchId        Int
+  
+  // Cluster Identity
+  name              String          @db.VarChar(255)
+  orderIndex        Int
+  
+  // Cluster Metrics (aggregated from keywords)
+  totalKeywords     Int             @default(0)
+  avgDifficulty     Float?
+  totalVolume       Int?            // Sum of all keyword volumes
+  priorityScore     Float?          // 0-100 calculated score
+  
+  // Cluster Classification
+  dominantFunnel    FunnelStage?
+  dominantIntent    SearchIntent?
+  
+  // Selection
+  isSelectedByAI    Boolean         @default(false)
+  isSelectedByUser  Boolean         @default(false)
+  aiRationale       String?         @db.Text
+  
+  createdAt         DateTime        @default(now())
+
+  research          KeywordResearch @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  keywords          Keyword[]
+  
+  @@index([researchId])
+  @@index([isSelectedByAI])
+  @@index([isSelectedByUser])
+  @@index([priorityScore])
+}
+
+model Keyword {
+  id                Int             @id @default(autoincrement())
+  clusterId         Int
+  
+  // Keyword Identity
+  keyword           String          @db.VarChar(500)
+  language          String          @db.VarChar(10)
+  
+  // SEO Metrics (FREE TOOLS - basic)
+  freeVolume        String?         @db.VarChar(50) // "0-100", "100-1K", "1K-10K"
+  freeDifficulty    DifficultyLevel?
+  relativePopularity Float?         // 0-100 from Google Trends
+  
+  // SEO Metrics (PREMIUM APIs - exact)
+  premiumVolume     Int?            // Exact monthly searches
+  premiumDifficulty Float?          // 0-100 exact difficulty score
+  premiumCPC        Float?          // Cost per click (USD)
+  premiumCompetition Float?         // 0-1 competition score
+  
+  // Classification
+  searchIntent      SearchIntent?
+  funnelStage       FunnelStage?
+  
+  // SERP Features (detected during research)
+  hasFeaturedSnippet Boolean        @default(false)
+  hasPAA            Boolean         @default(false) // People Also Ask
+  hasVideoCarousel  Boolean         @default(false)
+  hasImagePack      Boolean         @default(false)
+  hasLocalPack      Boolean         @default(false)
+  
+  // Cannibalization Check
+  isInExistingContent Boolean       @default(false)
+  existingContentUrl  String?       @db.VarChar(2048)
+  
+  // Selection
+  isSelectedByAI    Boolean         @default(false)
+  isSelectedByUser  Boolean         @default(false)
+  aiRationale       String?         @db.Text // Why AI selected/rejected this
+  
+  // Source Tracking
+  source            String?         @db.VarChar(100) // "google_suggest", "trends", "competitor", "reddit", "datafoerseo"
+  sourceUrl         String?         @db.VarChar(2048) // If from competitor or trending topic
+  
+  createdAt         DateTime        @default(now())
+
+  cluster           KeywordCluster  @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  calendarPosts     CalendarPost[]  // Posts using this keyword
+  
+  @@index([clusterId])
+  @@index([keyword])
+  @@index([isSelectedByAI])
+  @@index([isSelectedByUser])
+  @@unique([clusterId, keyword]) // No duplicate keywords in same cluster
+}
+
+enum FunnelStage {
+  ToF  // Top of Funnel
+  MoF  // Middle of Funnel
+  BoF  // Bottom of Funnel
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+  VERY_HARD
+}
+
+// ============================================
+// NEW: USER API KEYS (for premium tools)
+// ============================================
+
+model UserAPIKey {
+  id                Int             @id @default(autoincrement())
+  userId            String
+  
+  provider          String          @db.VarChar(50) // "datafoerseo" | "ahrefs" | "semrush"
+  apiKey            String          @db.VarChar(500) // Encrypted in app, store safely
+  
+  isActive          Boolean         @default(true)
+  lastUsedAt        DateTime?
+  usageCount        Int             @default(0)
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, provider])
+  @@index([userId])
+  @@index([isActive])
+}
