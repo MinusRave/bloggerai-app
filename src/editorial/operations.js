@@ -6,10 +6,6 @@ import {
   distributePostDates 
 } from './services/strategy.js';
 
-// ============================================
-// QUERIES (invariate)
-// ============================================
-
 export const getEditorialProjects = async (_args, context) => {
   if (!context.user) {
     throw new HttpError(401, 'Unauthorized');
@@ -43,6 +39,20 @@ export const getProjectById = async (args, context) => {
         where: { status: 'ACTIVE' },
         orderBy: { createdAt: 'desc' },
         take: 1,
+      },
+      keywordResearches: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        include: {
+          clusters: {
+            orderBy: { priorityScore: 'desc' },
+            include: {
+              keywords: {
+                orderBy: { keyword: 'asc' },
+              },
+            },
+          },
+        },
       },
     },
   });
@@ -85,7 +95,6 @@ export const getProjectById = async (args, context) => {
     activeStrategy,
   };
 };
-
 export const getStrategyConversation = async (args, context) => {
   if (!context.user) {
     throw new HttpError(401, 'Unauthorized');

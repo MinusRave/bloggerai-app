@@ -9,6 +9,7 @@ import {
 } from './keywordResearchFree.js';
 import { researchKeywordsPremium } from './keywordResearchPremium.js';
 import { analyzeOwnContent, isKeywordInExistingContent } from './ownContentAnalyzer.js';
+import { generateKeywordSeeds } from '../ai/researcher.js';
 import { EditorialError, ErrorCodes } from '../types.js';
 
 const anthropic = new Anthropic({
@@ -31,6 +32,24 @@ export async function executeKeywordResearch({
   console.log('[Keyword Research] Starting research...');
 
   try {
+    // STEP 0: AI SEED GENERATION (ALWAYS EXECUTED)
+    console.log('[Keyword Research] Generating AI seeds from project context...');
+    const aiSeeds = await generateKeywordSeeds(projectContext);
+
+    // Merge AI seeds with user-provided seeds
+    const userSeeds = projectContext.keywordSeed || [];
+    const combinedSeeds = [
+      ...aiSeeds.seeds,
+      ...userSeeds.map(s => s.toLowerCase().trim()),
+    ];
+
+    // Deduplicate
+    projectContext.keywordSeed = [...new Set(combinedSeeds)];
+
+    console.log(`[Keyword Research] AI generated ${aiSeeds.seeds.length} seeds`);
+    console.log(`[Keyword Research] User provided ${userSeeds.length} seeds`);
+    console.log(`[Keyword Research] Combined total: ${projectContext.keywordSeed.length} unique seeds`);
+
     // STEP 1: Expand keywords using free tools + analyze own content
     const freeResults = await executeFreeResearch(projectContext);
 
@@ -93,6 +112,7 @@ export async function executeKeywordResearch({
       totalKeywords: mergedKeywords.length,
       clusters: selectedClusters,
       ownContentAnalysis: freeResults.ownContent, // NEW: Include in results
+      aiSeedsMetadata: aiSeeds.aiMetadata, // NEW: Include AI seed generation metadata
       rawData: {
         freeResults,
         premiumResults,
@@ -363,6 +383,9 @@ async function selectOptimalKeywords(clusters, projectContext, ownContent) {
   });
 
   const selections = parseSelectionResponse(response.content[0].text);
+  
+  // DEBUG: Log per vedere cosa restituisce l'AI
+  console.log('[Selection] AI returned selections:', JSON.stringify(selections, null, 2));
 
   // Mark selected keywords
   return clusters.map((cluster) => {
@@ -370,7 +393,7 @@ async function selectOptimalKeywords(clusters, projectContext, ownContent) {
 
     const updatedKeywords = cluster.keywords.map((kw) => ({
       ...kw,
-      isSelectedByAI: selection?.selectedKeywords.includes(kw.keyword.toLowerCase()) || false,
+      isSelectedByAI: selection?.selectedKeywords?.includes(kw.keyword.toLowerCase()) || false,
       aiRationale: selection?.rationale || null,
     }));
 

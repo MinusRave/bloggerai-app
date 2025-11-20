@@ -1,7 +1,221 @@
 import { HttpError } from 'wasp/server';
 import { executeKeywordResearch } from './services/keywordResearchOrchestrator.js';
 import { generateStrategyFromKeywordResearch } from './ai/strategist.js';
-import { prisma } from 'wasp/server'; // ← ADD THIS IMPORT
+import { analyzeCompanySite } from './ai/siteAnalyzer.js';
+import { prisma } from 'wasp/server';
+
+
+// PASTE THIS INTO YOUR operations_keyword_research.js FILE
+// This adds the reRunKeywordResearch function
+
+import { researchKeywordsPremium } from './services/keywordResearchPremium.js';
+
+/**
+ * Re-run keyword research for a project (manual trigger by user)
+ * Allows user to choose between free and premium tools
+ */
+
+export const reRunKeywordResearch = async (args, context) => {
+  if (!context.user) {
+    throw new HttpError(401, 'Not authenticated');
+  }
+
+  const { projectId, usePremium = false } = args;
+
+  const project = await context.entities.EditorialProject.findUnique({
+    where: { id: projectId },
+  });
+
+  if (!project) {
+    throw new HttpError(404, 'Project not found');
+  }
+
+  if (project.userId !== context.user.id) {
+    throw new HttpError(403, 'Not authorized');
+  }
+
+  let premiumProvider = null;
+  let premiumAPIKey = null;
+
+  if (usePremium) {
+    const userAPIKeys = await context.entities.UserAPIKey.findMany({
+      where: {
+        userId: context.user.id,
+        isActive: true,
+      },
+    });
+
+    if (userAPIKeys.length === 0) {
+      throw new HttpError(400, 'No active API keys found. Please add an API key first.');
+    }
+
+    const apiKeyRecord = userAPIKeys[0];
+    premiumProvider = apiKeyRecord.provider;
+    premiumAPIKey = Buffer.from(apiKeyRecord.apiKey, 'base64').toString('utf-8');
+
+    await context.entities.UserAPIKey.update({
+      where: { id: apiKeyRecord.id },
+      data: {
+        lastUsedAt: new Date(),
+        usageCount: { increment: 1 },
+      },
+    });
+  }
+
+  console.log(`🔍 Starting keyword research for project ${projectId} (Premium: ${usePremium})`);
+
+  await context.entities.KeywordResearch.deleteMany({
+    where: { projectId },
+  });
+
+  const research = await context.entities.KeywordResearch.create({
+    data: {
+      projectId,
+      useFreeTool: !usePremium,
+      usePremiumAPI: usePremium,
+      premiumProvider: usePremium ? premiumProvider : null,
+      status: 'IN_PROGRESS',
+      startedAt: new Date(),
+      userProvidedSeeds: project.keywordSeed || [],
+    },
+  });
+
+  try {
+    const projectContext = {
+      name: project.name,
+      description: project.description,
+      language: project.language,
+      target: project.target,
+      objectives: project.objectives,
+      keywordSeed: project.keywordSeed,
+      competitorUrls: project.competitorUrls,
+      blogUrl: project.blogUrl,
+      mainSiteUrl: project.mainSiteUrl,
+      avoidCannibalization: project.avoidCannibalization,
+      knowledgeBase: project.knowledgeBase,
+    };
+
+    const researchResult = await executeKeywordResearch({
+      projectContext,
+      usePremiumAPI: usePremium,
+      premiumProvider: usePremium ? premiumProvider : null,
+      premiumAPIKey: usePremium ? premiumAPIKey : null,
+    });
+
+    for (const cluster of researchResult.clusters) {
+      const savedCluster = await context.entities.KeywordCluster.create({
+        data: {
+          researchId: research.id,
+          name: cluster.name,
+          orderIndex: cluster.orderIndex,
+          totalKeywords: cluster.totalKeywords,
+          avgDifficulty: cluster.avgDifficulty,
+          totalVolume: cluster.totalVolume,
+          priorityScore: cluster.priorityScore,
+          dominantFunnel: cluster.dominantFunnel,
+          dominantIntent: cluster.dominantIntent,
+          isSelectedByAI: cluster.isSelectedByAI,
+          aiRationale: cluster.aiRationale,
+        },
+      });
+
+      for (const kw of cluster.keywords) {
+        await context.entities.Keyword.create({
+          data: {
+            clusterId: savedCluster.id,
+            keyword: kw.keyword,
+            language: project.language,
+            freeVolume: kw.freeVolume,
+            freeDifficulty: kw.freeDifficulty,
+            relativePopularity: kw.relativePopularity,
+            premiumVolume: kw.premiumVolume,
+            premiumDifficulty: kw.premiumDifficulty,
+            premiumCPC: kw.premiumCPC,
+            premiumCompetition: kw.premiumCompetition,
+            searchIntent: kw.searchIntent,
+            funnelStage: kw.funnelStage,
+            hasFeaturedSnippet: kw.hasFeaturedSnippet,
+            hasPAA: kw.hasPAA,
+            hasVideoCarousel: kw.hasVideoCarousel,
+            hasImagePack: kw.hasImagePack,
+            hasLocalPack: kw.hasLocalPack,
+            isInExistingContent: kw.isInExistingContent,
+            existingContentUrl: kw.existingContentUrl,
+            isSelectedByAI: kw.isSelectedByAI,
+            isSelectedByUser: kw.isSelectedByUser,
+            aiRationale: kw.aiRationale,
+            source: kw.source,
+            sourceUrl: kw.sourceUrl,
+          },
+        });
+      }
+    }
+
+    const allKeywords = await context.entities.Keyword.findMany({
+      where: {
+        cluster: {
+          researchId: research.id,
+        },
+      },
+    });
+
+    const aiSelectedCount = allKeywords.filter(k => k.isSelectedByAI).length;
+
+    await context.entities.KeywordResearch.update({
+      where: { id: research.id },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        totalKeywordsFound: researchResult.totalKeywords,
+        totalClustersFound: researchResult.clusters.length,
+        aiSelectedCount,
+        aiModel: 'claude-sonnet-4-20250514',
+        processingMs: researchResult.duration,
+        errorMessage: null,
+      },
+    });
+
+    await context.entities.EditorialProject.update({
+      where: { id: projectId },
+      data: {
+        keywordResearchUpdatedAt: new Date(),
+        usePremiumKeywords: usePremium,
+        status: 'RESEARCH_READY',
+      },
+    });
+
+    console.log(`✅ Keyword research completed: ${researchResult.totalKeywords} keywords in ${researchResult.clusters.length} clusters`);
+
+    return {
+      success: true,
+      researchId: research.id,
+      count: researchResult.totalKeywords,
+      clusters: researchResult.clusters.length,
+      usePremium,
+    };
+
+  } catch (error) {
+    console.error('❌ Keyword research failed:', error);
+    
+    await context.entities.KeywordResearch.update({
+      where: { id: research.id },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        errorMessage: error.message || 'Unknown error occurred',
+      },
+    });
+
+    await context.entities.EditorialProject.update({
+      where: { id: projectId },
+      data: {
+        status: 'DRAFT',
+      },
+    });
+
+    throw new HttpError(500, `Research failed: ${error.message}`);
+  }
+};
 
 // ============================================
 // KEYWORD RESEARCH OPERATIONS
@@ -104,6 +318,75 @@ async function executeResearchBackground(
 ) {
   try {
     console.log(`[Keyword Research] Starting background research for project ${project.id}`);
+
+    // STEP 0: AI SITE ANALYSIS (if needed)
+    let siteAnalysisData = project.siteAnalysisData;
+    
+    // Run site analysis if:
+    // 1. mainSiteUrl is provided
+    // 2. No previous analysis exists OR project was updated
+    // 3. Description or KB is minimal
+    const needsSiteAnalysis = 
+      project.mainSiteUrl && 
+      (!siteAnalysisData || 
+       project.description.length < 50 || 
+       project.knowledgeBase.length < 100);
+
+    if (needsSiteAnalysis) {
+      console.log('[Keyword Research] Running AI site analysis...');
+      
+      try {
+        const analysis = await analyzeCompanySite(project.mainSiteUrl);
+        
+        siteAnalysisData = {
+          pagesAnalyzed: analysis.pagesAnalyzed,
+          extractedInfo: analysis.extractedInfo,
+          confidence: analysis.extractedInfo.confidence,
+          analyzedAt: new Date().toISOString(),
+        };
+
+        // Update project with analysis and extracted info
+        await prisma.editorialProject.update({
+          where: { id: project.id },
+          data: {
+            siteAnalysisData,
+            siteAnalyzedAt: new Date(),
+            // Auto-fill fields if they're minimal
+            description: project.description.length < 50 && analysis.extractedInfo.description
+              ? analysis.extractedInfo.description
+              : project.description,
+            target: project.target.length < 20 && analysis.extractedInfo.target
+              ? analysis.extractedInfo.target
+              : project.target,
+            objectives: project.objectives.length < 20 && analysis.extractedInfo.objectives
+              ? analysis.extractedInfo.objectives
+              : project.objectives,
+            knowledgeBase: project.knowledgeBase.length < 100 && analysis.extractedInfo.knowledgeBase
+              ? analysis.extractedInfo.knowledgeBase
+              : project.knowledgeBase,
+          },
+        });
+
+        // Update local project object
+        project.description = project.description.length < 50 && analysis.extractedInfo.description
+          ? analysis.extractedInfo.description
+          : project.description;
+        project.target = project.target.length < 20 && analysis.extractedInfo.target
+          ? analysis.extractedInfo.target
+          : project.target;
+        project.objectives = project.objectives.length < 20 && analysis.extractedInfo.objectives
+          ? analysis.extractedInfo.objectives
+          : project.objectives;
+        project.knowledgeBase = project.knowledgeBase.length < 100 && analysis.extractedInfo.knowledgeBase
+          ? analysis.extractedInfo.knowledgeBase
+          : project.knowledgeBase;
+
+        console.log('[Keyword Research] Site analysis complete and saved');
+      } catch (error) {
+        console.error('[Keyword Research] Site analysis failed:', error);
+        // Continue with research even if site analysis fails
+      }
+    }
 
     const projectContext = {
       name: project.name,
@@ -277,11 +560,18 @@ if (aiSelectedCount === 0 && allSavedKeywords.length > 0) {
     aiModel: 'claude-sonnet-4-20250514',
     tokenCount: null,
     processingMs: researchResult.duration,
-    // NEW FIELDS
+    // Own Content Analysis
     ownContentAnalyzed: ownContentAnalysis.analyzed,
     totalBlogPosts: ownContentAnalysis.totalPosts || 0,
     existingKeywordsCount: ownContentAnalysis.existingKeywords?.size || 0,
     ownContentData: ownContentData,
+    // NEW: Keyword Seeds Tracking
+    aiGeneratedSeeds: researchResult.aiSeedsMetadata ? 
+      projectContext.keywordSeed.filter(seed => 
+        !project.keywordSeed.some(userSeed => userSeed.toLowerCase() === seed.toLowerCase())
+      ) : [],
+    userProvidedSeeds: project.keywordSeed || [],
+    totalSeedsCount: projectContext.keywordSeed.length,
   },
 });
 

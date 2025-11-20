@@ -150,6 +150,10 @@ model EditorialProject {
   // Knowledge Base
   knowledgeBase     String          @db.Text
 
+  // AI Site Analysis (NEW)
+  siteAnalysisData  Json?           // {pagesAnalyzed: [], extractedInfo: {}, confidence: 'HIGH'}
+  siteAnalyzedAt    DateTime?
+
   // State machine
   status            ProjectStatus   @default(DRAFT)
 
@@ -164,6 +168,10 @@ model EditorialProject {
   
   // NEW: Keyword Research
   keywordResearches KeywordResearch[]
+
+  // NEW: Keyword research tracking
+  keywordResearchUpdatedAt DateTime?
+  usePremiumKeywords       Boolean  @default(false)
 
   @@index([userId, status])
   @@index([createdAt])
@@ -417,6 +425,12 @@ model KeywordResearch {
   totalBlogPosts     Int?           // Number of blog posts scraped
   existingKeywordsCount Int?        // Number of keywords found in existing content
   ownContentData     Json?          // Store detailed analysis: {existingKeywords: [], existingTopics: [], blogPosts: []}
+  // ===============================================
+
+  // ========== NEW: KEYWORD SEEDS TRACKING ==========
+  aiGeneratedSeeds   String[]       @default([])
+  userProvidedSeeds  String[]       @default([])
+  totalSeedsCount    Int            @default(0)
   // ===============================================
   
   // User Approval

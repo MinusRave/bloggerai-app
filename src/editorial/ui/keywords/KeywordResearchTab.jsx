@@ -1,310 +1,334 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from 'wasp/client/operations';
-import {
-  getKeywordResearch,
-  startKeywordResearch,
-  approveKeywordResearch,
-} from 'wasp/client/operations';
+import { reRunKeywordResearch, getUserAPIKeys, getKeywordResearch } from 'wasp/client/operations';
+import APIKeySettings from '../settings/APIKeySettings';
 import KeywordResearchStats from './KeywordResearchStats';
 import KeywordClusterView from './KeywordClusterView';
 import KeywordListView from './KeywordListView';
-import { ConfirmModal, SuccessModal, ErrorModal } from '../shared/ModalComponents';
+import KeywordSeedsDisplay from './KeywordSeedsDisplay';
 
 export default function KeywordResearchTab({ project }) {
+  const [showAPIKeys, setShowAPIKeys] = useState(false);
+  const [usePremium, setUsePremium] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
   const [viewMode, setViewMode] = useState('clusters'); // 'clusters' | 'list'
-  
-  // Modals state
-  const [showStartConfirm, setShowStartConfirm] = useState(false);
-  const [showApproveConfirm, setShowApproveConfirm] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [showErrorModal, setShowErrorModal] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  
-  const [isStarting, setIsStarting] = useState(false);
-  const [isApproving, setIsApproving] = useState(false);
 
-  const { data, isLoading, error, refetch } = useQuery(getKeywordResearch, {
-    projectId: project.id,
-  });
-  // ========== AGGIUNGI QUESTO BLOCCO DI DEBUG ==========
+  const { data: apiKeys } = useQuery(getUserAPIKeys);
+  
+  // ========== FIX: Get research from project.keywordResearches ==========
+  const research = project.keywordResearches?.[0]; // Most recent research
+  const hasAPIKeys = apiKeys && apiKeys.length > 0;
+  
+  // Check research status
+  const isResearchInProgress = research?.status === 'IN_PROGRESS';
+  const isResearchCompleted = research?.status === 'COMPLETED';
+  const isResearchFailed = research?.status === 'FAILED';
+  const hasResearchData = isResearchCompleted && research.clusters?.length > 0;
+  // ========================================================================
+
+  // ========== FIX: Poll for status updates when research is in progress ==========
   useEffect(() => {
-    if (data?.stats) {
-      console.log('🔍 KEYWORD RESEARCH DEBUG:');
-      console.log('  Total Keywords:', data.stats.totalKeywords);
-      console.log('  AI Selected:', data.stats.aiSelectedCount);
-      console.log('  User Selected:', data.stats.userSelectedCount);
-      console.log('  Final Selected:', data.stats.finalSelectedCount);
-      console.log('  Button should be:', data.stats.finalSelectedCount >= 30 ? 'ENABLED ✅' : 'DISABLED ❌');
-      
-      // Log some sample keywords to verify selection
-      if (data.research?.clusters) {
-        const allKeywords = data.research.clusters.flatMap(c => c.keywords);
-        const selected = allKeywords.filter(k => k.isSelectedByAI || k.isSelectedByUser);
-        console.log('  Sample selected keywords:', selected.slice(0, 5).map(k => k.keyword));
-      }
-    }
-  }, [data]);
-  // ========== FINE BLOCCO DEBUG ==========
+    if (!isResearchInProgress) return;
 
-  const handleStartResearch = async () => {
-    setShowStartConfirm(false);
-    setIsStarting(true);
-    
+    const pollInterval = setInterval(() => {
+      // Trigger a refetch by reloading
+      window.location.reload();
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [isResearchInProgress]);
+  // ================================================================================
+
+  // Check if strategy is outdated compared to keyword research
+  const isStrategyOutdated =
+    project.keywordResearchUpdatedAt &&
+    project.strategies?.length > 0 &&
+    new Date(project.keywordResearchUpdatedAt) >
+      new Date(project.strategies[0].updatedAt);
+
+  const handleRunResearch = async () => {
+    if (usePremium && !hasAPIKeys) {
+      alert('Please add API keys first to use premium research');
+      return;
+    }
+
+    if (
+      hasResearchData &&
+      !confirm(
+        'This will replace existing keyword research data. Continue?'
+      )
+    ) {
+      return;
+    }
+
+    setIsRunning(true);
     try {
-      await startKeywordResearch({ projectId: project.id });
+      await reRunKeywordResearch({
+        projectId: project.id,
+        usePremium,
+      });
       
-      // Poll for updates every 5 seconds
-      const pollInterval = setInterval(() => {
-        refetch();
-      }, 5000);
-
-      // Stop polling after 10 minutes
-      setTimeout(() => clearInterval(pollInterval), 600000);
-
-      setSuccessMessage('Keyword research started! The page will update automatically when complete.');
-      setShowSuccessModal(true);
+      // Reload to show new data
+      window.location.reload();
     } catch (error) {
-      console.error('Failed to start research:', error);
-      setErrorMessage(error.message || 'Failed to start keyword research. Please try again.');
-      setShowErrorModal(true);
+      console.error('Failed to run research:', error);
+      alert('Failed to run research: ' + error.message);
     } finally {
-      setIsStarting(false);
+      setIsRunning(false);
     }
   };
 
-  const handleApproveResearch = async () => {
-    setShowApproveConfirm(false);
-    setIsApproving(true);
-    
-    try {
-      await approveKeywordResearch({ researchId: data.research.id });
-      setSuccessMessage('Keyword research approved! You can now generate your editorial strategy.');
-      setShowSuccessModal(true);
-      refetch();
-    } catch (error) {
-      console.error('Failed to approve research:', error);
-      setErrorMessage(error.message || 'Failed to approve research. Please try again.');
-      setShowErrorModal(true);
-    } finally {
-      setIsApproving(false);
-    }
-  };
+  // Calculate stats for display
+  const stats = research ? {
+    totalKeywords: research.totalKeywordsFound || 0,
+    totalClusters: research.totalClustersFound || 0,
+    aiSelectedCount: research.aiSelectedCount || 0,
+    userSelectedCount: research.userSelectedCount || 0,
+    finalSelectedCount: (research.aiSelectedCount || 0) + (research.userSelectedCount || 0),
+    funnelDistribution: {
+      ToF: research.clusters?.reduce((sum, c) => sum + (c.dominantFunnel === 'ToF' ? c.totalKeywords : 0), 0) || 0,
+      MoF: research.clusters?.reduce((sum, c) => sum + (c.dominantFunnel === 'MoF' ? c.totalKeywords : 0), 0) || 0,
+      BoF: research.clusters?.reduce((sum, c) => sum + (c.dominantFunnel === 'BoF' ? c.totalKeywords : 0), 0) || 0,
+    },
+    intentDistribution: {
+      INFORMATIONAL: research.clusters?.flatMap(c => c.keywords).filter(k => k.searchIntent === 'INFORMATIONAL').length || 0,
+      NAVIGATIONAL: research.clusters?.flatMap(c => c.keywords).filter(k => k.searchIntent === 'NAVIGATIONAL').length || 0,
+      TRANSACTIONAL: research.clusters?.flatMap(c => c.keywords).filter(k => k.searchIntent === 'TRANSACTIONAL').length || 0,
+      COMMERCIAL: research.clusters?.flatMap(c => c.keywords).filter(k => k.searchIntent === 'COMMERCIAL').length || 0,
+    },
+  } : null;
 
-  const checkApprovalEligibility = () => {
-    if (!data?.research) return false;
-    
-    const selectedCount = data.stats.finalSelectedCount;
-
-    if (selectedCount < 30) {
-      setErrorMessage(
-        `Not enough keywords selected. You need at least 30 keywords, but only ${selectedCount} are selected. Please select more keywords before approving.`
-      );
-      setShowErrorModal(true);
-      return false;
-    }
-    
-    return true;
-  };
-
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading keyword research...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-6">
-        <p className="text-red-800">Failed to load keyword research: {error.message}</p>
-      </div>
-    );
-  }
-
-  // No research yet - show start button
-  if (!data || !data.research) {
-    return (
-      <>
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
-          <div className="max-w-2xl mx-auto">
-            <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg
-                className="w-10 h-10 text-blue-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
+  return (
+    <div className="space-y-6">
+      {/* Strategy outdated warning */}
+      {isStrategyOutdated && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="text-xl">⚠️</div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-yellow-900 mb-1">
+                Strategy May Be Outdated
+              </h3>
+              <p className="text-sm text-yellow-800">
+                Keyword research was updated after the current strategy was generated.
+                Your strategy may not reflect the latest keyword data. Consider regenerating
+                your strategy to align with the updated research.
+              </p>
             </div>
-
-            <h3 className="text-xl font-semibold text-gray-900 mb-3">
-              Start Keyword Research
-            </h3>
-
-            <p className="text-gray-600 mb-6">
-              Discover hundreds of keyword opportunities for your blog using AI-powered
-              research. We'll analyze your seed keywords, competitors, and industry trends
-              to find the best topics to rank for.
-            </p>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-              <h4 className="font-medium text-blue-900 mb-2">What we'll analyze:</h4>
-              <ul className="text-sm text-blue-800 space-y-1 text-left max-w-md mx-auto">
-                <li>✓ Google Suggest keyword expansion</li>
-                <li>✓ Competitor content analysis</li>
-                <li>✓ SERP features & opportunities</li>
-                <li>✓ Trending topics in your industry</li>
-                <li>✓ AI-powered keyword clustering</li>
-                <li>✓ Automatic selection of optimal keywords</li>
-              </ul>
-            </div>
-
-            <button
-              onClick={() => setShowStartConfirm(true)}
-              disabled={isStarting}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isStarting ? (
-                <>
-                  <span className="inline-block animate-spin mr-2">⏳</span>
-                  Starting Research...
-                </>
-              ) : (
-                <>
-                  <span className="mr-2">🔍</span>
-                  Start Keyword Research
-                </>
-              )}
-            </button>
-
-            <p className="text-xs text-gray-500 mt-4">
-              This process takes 2-5 minutes depending on the number of seed keywords and
-              competitors.
-            </p>
           </div>
         </div>
+      )}
 
-        {/* Confirmation Modal */}
-        <ConfirmModal
-          isOpen={showStartConfirm}
-          onClose={() => setShowStartConfirm(false)}
-          onConfirm={handleStartResearch}
-          title="Start Keyword Research?"
-          message="This will analyze your seed keywords, competitors, and industry trends. The process takes 2-5 minutes and you'll be notified when complete."
-          confirmText="Start Research"
-          variant="primary"
-        />
-
-        {/* Success Modal */}
-        <SuccessModal
-          isOpen={showSuccessModal}
-          onClose={() => setShowSuccessModal(false)}
-          title="Research Started!"
-          message={successMessage}
-        />
-
-        {/* Error Modal */}
-        <ErrorModal
-          isOpen={showErrorModal}
-          onClose={() => setShowErrorModal(false)}
-          title="Error"
-          message={errorMessage}
-        />
-      </>
-    );
-  }
-
-  const { research, stats } = data;
-
-  // Research in progress
-  if (research.status === 'IN_PROGRESS' || research.status === 'PENDING') {
-    return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
-        <div className="max-w-xl mx-auto">
-          <div className="animate-pulse mb-4">
-            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto">
-              <svg
-                className="w-8 h-8 text-blue-600 animate-spin"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                ></circle>
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                ></path>
-              </svg>
+      {/* ========== FIX: Show in-progress banner ========== */}
+      {isResearchInProgress && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+          <div className="flex items-center gap-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-blue-900 mb-1">
+                Research in Progress...
+              </h3>
+              <p className="text-sm text-blue-700">
+                Keyword research is currently running. This may take a few minutes.
+                You can leave this page and come back later.
+              </p>
+              <p className="text-xs text-blue-600 mt-2">
+                Started: {new Date(research.startedAt).toLocaleString()}
+              </p>
             </div>
           </div>
+        </div>
+      )}
 
-          <h3 className="text-xl font-semibold text-gray-900 mb-3">
-            Keyword Research in Progress
-          </h3>
-
-          <p className="text-gray-600 mb-6">
-            We're analyzing your seed keywords, competitors, and industry trends. This
-            usually takes 2-5 minutes.
-          </p>
-
-          <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm text-left">
-            <div className="flex items-center gap-2">
-              <span className="text-green-600">✓</span>
-              <span>Expanding seed keywords with Google Suggest</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-600">✓</span>
-              <span>Analyzing SERP features and opportunities</span>
-            </div>
-            <div className="flex items-center gap-2 text-gray-400">
-              <span>⏳</span>
-              <span>Clustering keywords by topic</span>
-            </div>
-            <div className="flex items-center gap-2 text-gray-400">
-              <span>⏳</span>
-              <span>AI-powered keyword selection</span>
+      {/* ========== FIX: Show failure banner ========== */}
+      {isResearchFailed && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="text-xl">❌</div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-red-900 mb-1">
+                Research Failed
+              </h3>
+              <p className="text-sm text-red-800 mb-2">
+                The keyword research process encountered an error:
+              </p>
+              <p className="text-sm text-red-700 bg-red-100 rounded p-2 font-mono">
+                {research.errorMessage}
+              </p>
+              <p className="text-xs text-red-600 mt-2">
+                Failed at: {new Date(research.completedAt).toLocaleString()}
+              </p>
             </div>
           </div>
+        </div>
+      )}
 
-          <button
-            onClick={() => refetch()}
-            className="mt-6 text-blue-600 hover:text-blue-700 text-sm font-medium"
+      {/* API Keys Section (collapsible) */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <button
+          onClick={() => setShowAPIKeys(!showAPIKeys)}
+          className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xl">🔑</span>
+            <div className="text-left">
+              <h3 className="font-semibold text-gray-900">Premium API Keys</h3>
+              <p className="text-sm text-gray-600">
+                {hasAPIKeys
+                  ? `${apiKeys.length} provider(s) connected`
+                  : 'No API keys configured'}
+              </p>
+            </div>
+          </div>
+          <svg
+            className={`w-5 h-5 text-gray-400 transition-transform ${
+              showAPIKeys ? 'rotate-180' : ''
+            }`}
+            fill="currentColor"
+            viewBox="0 0 20 20"
           >
-            Refresh Status
+            <path
+              fillRule="evenodd"
+              d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+
+        {showAPIKeys && (
+          <div className="px-6 pb-6 border-t border-gray-200">
+            <div className="pt-6">
+              <APIKeySettings />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Keyword Research Controls */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">
+          Keyword Research
+        </h3>
+
+        <div className="space-y-4">
+          {/* Premium toggle */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div className="flex-1">
+              <div className="font-medium text-gray-900 mb-1">
+                Use Premium APIs
+              </div>
+              <p className="text-sm text-gray-600">
+                {hasAPIKeys
+                  ? 'Get exact search volumes, difficulty scores, and CPC data'
+                  : 'Add API keys above to enable premium research'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={usePremium}
+                onChange={(e) => setUsePremium(e.target.checked)}
+                disabled={!hasAPIKeys || isRunning || isResearchInProgress}
+                className="sr-only peer"
+              />
+              <div
+                className={`w-11 h-6 rounded-full peer ${
+                  !hasAPIKeys || isRunning || isResearchInProgress
+                    ? 'bg-gray-300 cursor-not-allowed'
+                    : 'bg-gray-200 peer-checked:bg-blue-600'
+                } peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 transition-colors`}
+              >
+                <div
+                  className={`absolute top-[2px] left-[2px] bg-white border border-gray-300 rounded-full h-5 w-5 transition-transform ${
+                    usePremium ? 'translate-x-5' : ''
+                  }`}
+                />
+              </div>
+            </label>
+          </div>
+
+          {/* Run button */}
+          <button
+            onClick={handleRunResearch}
+            disabled={isRunning || isResearchInProgress}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {isRunning || isResearchInProgress ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                {isResearchInProgress ? 'Research Running...' : 'Starting...'}
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path
+                    fillRule="evenodd"
+                    d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                {hasResearchData ? 'Re-run' : 'Run'} Keyword Analysis
+              </>
+            )}
+          </button>
+
+          {research && research.completedAt && (
+            <p className="text-xs text-gray-500 text-center">
+              Last {isResearchFailed ? 'attempted' : 'updated'}:{' '}
+              {new Date(research.completedAt).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+              {' • '}
+              Using {research.usePremiumAPI ? 'Premium' : 'Free'} tools
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Keyword Seeds Display */}
+      {research && <KeywordSeedsDisplay research={research} />}
+
+      {/* Stats */}
+      {hasResearchData && stats && (
+        <KeywordResearchStats stats={stats} research={research} />
+      )}
+
+      {/* View Mode Switcher */}
+      {hasResearchData && (
+        <div className="flex gap-2 bg-white rounded-lg shadow-sm border border-gray-200 p-2">
+          <button
+            onClick={() => setViewMode('clusters')}
+            className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+              viewMode === 'clusters'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            📊 Cluster View
+          </button>
+          <button
+            onClick={() => setViewMode('list')}
+            className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+              viewMode === 'list'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            📋 List View
           </button>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  // Research failed
-  if (research.status === 'FAILED') {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
-        <div className="max-w-xl mx-auto">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      {/* Keyword Results */}
+      {!hasResearchData && !isResearchInProgress && !isResearchFailed && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-12 text-center">
+          <div className="max-w-md mx-auto">
             <svg
-              className="w-8 h-8 text-red-600"
+              className="w-16 h-16 mx-auto text-gray-400 mb-4"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -313,179 +337,35 @@ export default function KeywordResearchTab({ project }) {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
               />
             </svg>
-          </div>
-
-          <h3 className="text-xl font-semibold text-gray-900 mb-3">
-            Research Failed
-          </h3>
-
-          <p className="text-gray-600 mb-4">
-            An error occurred during keyword research:
-          </p>
-
-          <div className="bg-white border border-red-200 rounded-lg p-4 mb-6">
-            <p className="text-sm text-red-800 font-mono">
-              {research.errorMessage || 'Unknown error'}
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              No Keyword Research Yet
+            </h3>
+            <p className="text-gray-600">
+              Run keyword analysis to discover the best keywords for your content strategy
             </p>
           </div>
-
-          <button
-            onClick={() => setShowStartConfirm(true)}
-            disabled={isStarting}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
-          >
-            Try Again
-          </button>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  // Research completed - show results
-  return (
-    <>
-      <div className="space-y-6">
-        {/* Header with status and actions */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">
-                Keyword Research Results
-              </h3>
-              <p className="text-sm text-gray-600 mt-1">
-                {research.status === 'APPROVED'
-                  ? 'Research approved and ready for strategy generation'
-                  : 'Review and select keywords for your editorial strategy'}
-              </p>
-            </div>
+      {hasResearchData && viewMode === 'clusters' && (
+        <KeywordClusterView
+          clusters={research.clusters}
+          stats={stats}
+          onUpdate={() => window.location.reload()}
+          isApproved={research.isApproved}
+        />
+      )}
 
-            <div className="flex items-center gap-3">
-              {/* View mode toggle */}
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setViewMode('clusters')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === 'clusters'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  📊 Clusters
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === 'list'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  📋 List
-                </button>
-              </div>
-
-              <button
-  onClick={async () => {
-    try {
-      const result = await cleanupKeywordSelectionFlags({ researchId: data.research.id });
-      alert(`Fixed ${result.fixed} keywords! New total: ${result.newCounts.total}`);
-      refetch();
-    } catch (e) {
-      alert('Cleanup failed: ' + e.message);
-    }
-  }}
-  className="bg-orange-600 text-white px-4 py-2 rounded"
->
-  🔧 Cleanup Flags
-</button>
-
-              {/* Approve button */}
-              {research.status !== 'APPROVED' && (
-                <button
-                  onClick={() => {
-                    if (checkApprovalEligibility()) {
-                      setShowApproveConfirm(true);
-                    }
-                  }}
-                  disabled={isApproving || stats.finalSelectedCount < 30}
-                  className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {isApproving ? (
-                    <>
-                      <span className="animate-spin">⏳</span>
-                      Approving...
-                    </>
-                  ) : (
-                    <>
-                      <span>✓</span>
-                      Approve & Continue
-                    </>
-                  )}
-                </button>
-              )}
-
-              {research.status === 'APPROVED' && (
-                <div className="bg-green-100 text-green-800 px-4 py-2 rounded-lg text-sm font-medium">
-                  ✓ Approved
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Stats */}
-          <KeywordResearchStats stats={stats} research={research} />
-        </div>
-
-        {/* Main content */}
-        {viewMode === 'clusters' ? (
-          <KeywordClusterView
-            clusters={research.clusters}
-            stats={stats}
-            onUpdate={refetch}
-            isApproved={research.status === 'APPROVED'}
-          />
-        ) : (
-          <KeywordListView
-            clusters={research.clusters}
-            stats={stats}
-            onUpdate={refetch}
-            isApproved={research.status === 'APPROVED'}
-          />
-        )}
-      </div>
-
-      {/* Approve Confirmation Modal */}
-      <ConfirmModal
-        isOpen={showApproveConfirm}
-        onClose={() => setShowApproveConfirm(false)}
-        onConfirm={handleApproveResearch}
-        title="Approve Keyword Selection?"
-        message={`You've selected ${stats.finalSelectedCount} keywords. Once approved, you can generate your editorial strategy based on these keywords. This action cannot be undone.`}
-        confirmText="Approve Selection"
-        variant="success"
-      />
-
-      {/* Success Modal */}
-      <SuccessModal
-        isOpen={showSuccessModal}
-        onClose={() => {
-          setShowSuccessModal(false);
-          refetch();
-        }}
-        title="Success!"
-        message={successMessage}
-      />
-
-      {/* Error Modal */}
-      <ErrorModal
-        isOpen={showErrorModal}
-        onClose={() => setShowErrorModal(false)}
-        title="Error"
-        message={errorMessage}
-      />
-    </>
+      {hasResearchData && viewMode === 'list' && (
+        <KeywordListView
+          clusters={research.clusters}
+          onUpdate={() => window.location.reload()}
+          isApproved={research.isApproved}
+        />
+      )}
+    </div>
   );
 }

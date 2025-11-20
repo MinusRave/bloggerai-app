@@ -13,7 +13,7 @@ import KeywordResearchTab from './keywords/KeywordResearchTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: '📊' },
-  { id: 'keywords', label: 'Keywords', icon: '🔍' },     
+  { id: 'keywords', label: 'Keywords', icon: '🔑' },     
   { id: 'strategy', label: 'Strategy', icon: '🎯' },
   { id: 'calendar', label: 'Calendar', icon: '📅' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },

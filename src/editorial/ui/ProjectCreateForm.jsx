@@ -7,6 +7,7 @@ export default function ProjectCreateForm() {
   const [step, setStep] = useState(1);
   const [error, setError] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [showAdvancedUrls, setShowAdvancedUrls] = useState(false);
 
   // Calculate default first publish date (today + 7 days)
   const getDefaultFirstPublishDate = () => {
@@ -23,6 +24,10 @@ export default function ProjectCreateForm() {
     objectives: '',
     blogUrl: '',
     mainSiteUrl: '',
+    sitemapUrl: '',
+    aboutPageUrl: '',
+    pricingPageUrl: '',
+    servicesPageUrl: '',
     competitorUrls: [''],
     keywordSeed: [''],
     firstPublishDate: getDefaultFirstPublishDate(),
@@ -253,9 +258,82 @@ export default function ProjectCreateForm() {
                   placeholder="https://yourcompany.com"
                 />
                 <p className="mt-1 text-xs text-gray-600">
-                  Your corporate site (if different from blog) for additional content analysis
+                  AI will analyze your site to extract business info automatically
                 </p>
               </div>
+
+              {/* Advanced URL Configuration */}
+              <div className="border-t border-gray-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedUrls(!showAdvancedUrls)}
+                  className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                >
+                  {showAdvancedUrls ? '▼' : '▶'} Advanced: Specify Key Pages
+                </button>
+                <p className="text-xs text-gray-500 mt-1">
+                  Optional: Provide specific URLs for more accurate AI analysis (leave blank for auto-discovery)
+                </p>
+              </div>
+
+              {showAdvancedUrls && (
+                <div className="space-y-3 bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <div>
+                    <label className="block text-sm font-medium text-blue-900 mb-1">
+                      Sitemap URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.sitemapUrl}
+                      onChange={(e) => handleChange('sitemapUrl', e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      placeholder="https://yoursite.com/sitemap.xml"
+                    />
+                    <p className="text-xs text-blue-700 mt-1">
+                      For accurate blog post discovery
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-blue-900 mb-1">
+                      About Page URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.aboutPageUrl}
+                      onChange={(e) => handleChange('aboutPageUrl', e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      placeholder="https://yoursite.com/about"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-blue-900 mb-1">
+                      Pricing Page URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.pricingPageUrl}
+                      onChange={(e) => handleChange('pricingPageUrl', e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      placeholder="https://yoursite.com/pricing"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-blue-900 mb-1">
+                      Services/Products Page URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.servicesPageUrl}
+                      onChange={(e) => handleChange('servicesPageUrl', e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      placeholder="https://yoursite.com/services"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

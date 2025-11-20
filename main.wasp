@@ -374,6 +374,8 @@ action startKeywordResearch {
   entities: [
     EditorialProject,
     KeywordResearch,
+    KeywordCluster,
+    Keyword,
     UserAPIKey
   ]
 }
@@ -457,4 +459,9 @@ action validateAPIKey {
 action cleanupKeywordSelectionFlags {
   fn: import { cleanupKeywordSelectionFlags } from "@src/editorial/operations_keyword_research.js",
   entities: [KeywordResearch, Keyword, EditorialProject]
+}
+
+action reRunKeywordResearch {
+  fn: import { reRunKeywordResearch } from "@src/editorial/operations_keyword_research",
+  entities: [User, EditorialProject, KeywordResearch, KeywordCluster, Keyword, UserAPIKey]
 }
